@@ -1,68 +1,72 @@
-name: ci
+name: Build and publish app release
+
 on:
   workflow_dispatch:
+      types: [published]
+
+env:
+  APP_NAME: news
+
 jobs:
-  test-linux:
+  build_and_publish:
+    environment: release
     runs-on: ubuntu-latest
+    name: "Release: build, sign and upload the app"
     strategy:
-      fail-fast: false
       matrix:
-        distro:
-          - 'centos:7'
-          - 'centos:8'
-          - 'ubuntu:18.04'
-          - 'ubuntu:20.04'
-        php:
-          - '5.2.17'
-          - '5.3.29'
-          - '5.4.45'
-          - '5.5.38'
-          - '5.6.40'
-          - '7.0.33'
-          - '7.1.33'
-          - '7.2.34'
-          - '7.3.28'
-          - '7.4.20'
-          - '8.0.7'
-        exclude:
-          # TODO: libmysqlclient-dev dependency
-          - { distro: 'centos:7', php: '5.2.17'}
-          # TODO: libmysqlclient-dev dependency & curl-config
-          - { distro: 'centos:8', php: '5.2.17'}
-          - { distro: 'ubuntu:18.04', php: '5.2.17'}
-          - { distro: 'ubuntu:20.04', php: '5.2.17'}
-          # TODO: curl-config
-          - { distro: 'ubuntu:18.04', php: '5.3.29'}
-          - { distro: 'ubuntu:18.04', php: '5.4.45'}
-          - { distro: 'ubuntu:18.04', php: '5.5.38'}
-          - { distro: 'ubuntu:18.04', php: '5.6.40'}
-          - { distro: 'ubuntu:20.04', php: '5.3.29'}
-          - { distro: 'ubuntu:20.04', php: '5.4.45'}
-          - { distro: 'ubuntu:20.04', php: '5.5.38'}
-          - { distro: 'ubuntu:20.04', php: '5.6.40'}
-          # TODO: icu-config / intl
-          - { distro: 'ubuntu:20.04', php: '7.0.33'}
-          # TODO: openssl 1.0.2
-          - { distro: 'centos:8', php: '5.3.29'}
-          - { distro: 'centos:8', php: '5.4.45'}
-          - { distro: 'centos:8', php: '5.5.38'}
-    name: "test (php-${{ matrix.php }}, ${{ matrix.distro }})"
-    container: "${{ matrix.distro }}"
-    env:
-      # https://bugs.php.net/bug.php?id=79445
-      PHP_BUILD_CURL_OPTS: '--retry 3 --retry-delay 5 --connect-timeout 10'
+        php-versions: ['7.4']
+        nextcloud: ['stable21']
+        database: ['sqlite']
     steps:
-      - uses: actions/checkout@v2
-      - name: install dependencies
+      - name: Checkout
+        uses: actions/checkout@5a4ac9002d0be2fb38bd78e4b4dbde5606d7042f
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@afefcaf556d98dc7896cca380e181decb609ca44
+        with:
+          php-version: ${{ matrix.php-versions }}
+          extensions: pdo_sqlite,pdo_mysql,pdo_pgsql,gd,zip
+          coverage: none
+
+      - name: Set up server non MySQL
+        uses: SMillerDev/nextcloud-actions/setup-nextcloud@fae87e29aa7cdf1ea0b8033c67f60e75b10be2cd
+        with:
+          cron: false
+          version: ${{ matrix.nextcloud }}
+          database-type: ${{ matrix.database }}
+
+      
+      - name: Configure server with app
+        uses: SMillerDev/nextcloud-actions/setup-nextcloud-app@fae87e29aa7cdf1ea0b8033c67f60e75b10be2cd
+        with:
+          app: ${{ env.APP_NAME }}
+          check-code: false
+
+      - name: Create signed release archive
         run: |
-          set -ex
-          ./install-dependencies.sh
-          git clone --depth 1 https://github.com/sstephenson/bats.git
-          ./bats/install.sh /usr/local
-      - name: run tests
-        run: |
-          set -ex
-          if ! ./run-tests.sh ${{ matrix.php }}; then
-            cat /tmp/php-build.*.log
-            exit 1
-          fi
+          cd ../server/apps/${{ env.APP_NAME }} && make appstore
+        env:
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          app_public_crt: ${{ secrets.APP_PUBLIC_CRT }}
+
+      - name: Upload app tarball to release
+        uses: svenstaro/upload-release-action@483c1e56f95e88835747b1c7c60581215016cbf2
+        id: attach_to_release
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ../server/apps/${{ env.APP_NAME }}/build/artifacts/appstore/${{ env.APP_NAME }}.tar.gz
+          asset_name: ${{ env.APP_NAME }}.tar.gz
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - name: Upload app to Nextcloud appstore
+        uses: R0Wi/nextcloud-appstore-push-action@a011fe619bcf6e77ddebc96f9908e1af4071b9c1
+        with:
+          app_name: ${{ env.APP_NAME }}
+          appstore_token: ${{ secrets.APPSTORE_TOKEN }}
+          download_url: ${{ steps.attach_to_release.outputs.browser_download_url }}
+          app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          nightly: ${{ github.event.release.prerelease }}
+
+      - name: Delete crt and key from local storage
+        run: rm -f ~/.nextcloud/certificates/*
