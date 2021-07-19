@@ -1,7 +1,6 @@
 name: ci
 on:
-  pull_request:
-  push:
+  workflow_dispatch:
 jobs:
   test-linux:
     runs-on: ubuntu-latest
