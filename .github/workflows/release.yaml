@@ -2,7 +2,6 @@ name: Build and publish app release
 
 on:
   workflow_dispatch:
-      types: [published]
 
 env:
   APP_NAME: news
