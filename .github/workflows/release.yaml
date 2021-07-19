@@ -1,7 +1,7 @@
 name: Build and publish app release
 
 on:
-  workflow_dispatch:
+  release:
       types: [published]
 
 env:
