@@ -34,6 +34,9 @@ jobs:
           cron: false
           version: ${{ matrix.nextcloud }}
           database-type: ${{ matrix.database }}
+          
+      - name: Prime app build
+        run: make
 
       
       - name: Configure server with app
